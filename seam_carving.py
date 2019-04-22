@@ -1,33 +1,33 @@
 import numpy as np
 import cv2
+import numba
 
 
 class SeamCarver:
-    def __init__(self, filename, out_height, out_width, protect_mask='', object_mask=''):
+    def __init__(self, in_image, out_height, out_width, protect_mask=[], object_mask=[]):
         # initialize parameter
-        self.filename = filename
+        self.in_image = in_image.astype(np.float64)
         self.out_height = out_height
         self.out_width = out_width
 
         # read in image and store as np.float64 format
-        self.in_image = cv2.imread(filename).astype(np.float64)
         self.in_height, self.in_width = self.in_image.shape[: 2]
 
         # keep tracking resulting image
         self.out_image = np.copy(self.in_image)
 
         # object removal --> self.object = True
-        self.object = (object_mask != '')
-        if self.object:
+        self.object = object_mask
+        if len(self.object) > 0:
             # read in object mask image file as np.float64 format in gray scale
-            self.mask = cv2.imread(object_mask, 0).astype(np.float64)
-            self.protect = False
+            self.mask = object_mask.astype(np.float64)
+            self.protect = []
         # image re-sizing with or without protect mask
         else:
-            self.protect = (protect_mask != '')
-            if self.protect:
+            self.protect = protect_mask
+            if len(self.protect) > 0:
                 # if protect_mask filename is provided, read in protect mask image file as np.float64 format in gray scale
-                self.mask = cv2.imread(protect_mask, 0).astype(np.float64)
+                self.mask = protect_mask.astype(np.float64)
 
         # kernel for forward energy map calculation
         self.kernel_x = np.array([[0., 0., 0.], [-1., 0., 1.], [0., 0., 0.]], dtype=np.float64)
@@ -48,7 +48,7 @@ class SeamCarver:
         If object mask is provided --> object removal function will be executed
         else --> seam carving function (image retargeting) will be process
         """
-        if self.object:
+        if len(self.object) > 0:
             self.object_removal()
         else:
             self.seams_carving()
@@ -80,19 +80,20 @@ class SeamCarver:
         # remove row
         if delta_row < 0:
             self.out_image = self.rotate_image(self.out_image, 1)
-            if self.protect:
+            if len(self.protect) > 0:
                 self.mask = self.rotate_mask(self.mask, 1)
             self.seams_removal(delta_row * -1)
             self.out_image = self.rotate_image(self.out_image, 0)
         # insert row
         elif delta_row > 0:
             self.out_image = self.rotate_image(self.out_image, 1)
-            if self.protect:
+            if len(self.protect) > 0:
                 self.mask = self.rotate_mask(self.mask, 1)
             self.seams_insertion(delta_row)
             self.out_image = self.rotate_image(self.out_image, 0)
 
 
+    @numba.jit
     def object_removal(self):
         """
         :return:
@@ -123,9 +124,9 @@ class SeamCarver:
         if rotate:
             self.out_image = self.rotate_image(self.out_image, 0)
 
-
+    @numba.jit
     def seams_removal(self, num_pixel):
-        if self.protect:
+        if len(self.protect) > 0:
             for dummy in range(num_pixel):
                 energy_map = self.calc_energy_map()
                 energy_map[np.where(self.mask > 0)] *= self.constant
@@ -140,9 +141,9 @@ class SeamCarver:
                 seam_idx = self.find_seam(cumulative_map)
                 self.delete_seam(seam_idx)
 
-
+    @numba.jit
     def seams_insertion(self, num_pixel):
-        if self.protect:
+        if len(self.protect) > 0:
             temp_image = np.copy(self.out_image)
             temp_mask = np.copy(self.mask)
             seams_record = []
@@ -182,7 +183,7 @@ class SeamCarver:
                 self.add_seam(seam)
                 seams_record = self.update_seams(seams_record, seam)
 
-
+    @numba.jit
     def calc_energy_map(self):
         b, g, r = cv2.split(self.out_image)
         b_energy = np.absolute(cv2.Scharr(b, -1, 1, 0)) + np.absolute(cv2.Scharr(b, -1, 0, 1))
@@ -190,7 +191,7 @@ class SeamCarver:
         r_energy = np.absolute(cv2.Scharr(r, -1, 1, 0)) + np.absolute(cv2.Scharr(r, -1, 0, 1))
         return b_energy + g_energy + r_energy
 
-
+    @numba.jit
     def cumulative_map_backward(self, energy_map):
         m, n = energy_map.shape
         output = np.copy(energy_map)
@@ -200,7 +201,7 @@ class SeamCarver:
                     energy_map[row, col] + np.amin(output[row - 1, max(col - 1, 0): min(col + 2, n - 1)])
         return output
 
-
+    @numba.jit
     def cumulative_map_forward(self, energy_map):
         matrix_x = self.calc_neighbor_matrix(self.kernel_x)
         matrix_y_left = self.calc_neighbor_matrix(self.kernel_y_left)
@@ -225,7 +226,7 @@ class SeamCarver:
                     output[row, col] = energy_map[row, col] + min(e_left, e_right, e_up)
         return output
 
-
+    @numba.jit
     def calc_neighbor_matrix(self, kernel):
         b, g, r = cv2.split(self.out_image)
         output = np.absolute(cv2.filter2D(b, -1, kernel=kernel)) + \
@@ -233,7 +234,7 @@ class SeamCarver:
                  np.absolute(cv2.filter2D(r, -1, kernel=kernel))
         return output
 
-
+    @numba.jit
     def find_seam(self, cumulative_map):
         m, n = cumulative_map.shape
         output = np.zeros((m,), dtype=np.uint32)
@@ -246,7 +247,7 @@ class SeamCarver:
                 output[row] = np.argmin(cumulative_map[row, prv_x - 1: min(prv_x + 2, n - 1)]) + prv_x - 1
         return output
 
-
+    @numba.jit
     def delete_seam(self, seam_idx):
         m, n = self.out_image.shape[: 2]
         output = np.zeros((m, n - 1, 3))
@@ -257,7 +258,7 @@ class SeamCarver:
             output[row, :, 2] = np.delete(self.out_image[row, :, 2], [col])
         self.out_image = np.copy(output)
 
-
+    @numba.jit
     def add_seam(self, seam_idx):
         m, n = self.out_image.shape[: 2]
         output = np.zeros((m, n + 1, 3))
@@ -276,7 +277,7 @@ class SeamCarver:
                     output[row, col + 1:, ch] = self.out_image[row, col:, ch]
         self.out_image = np.copy(output)
 
-
+    @numba.jit
     def update_seams(self, remaining_seams, current_seam):
         output = []
         for seam in remaining_seams:
@@ -284,7 +285,7 @@ class SeamCarver:
             output.append(seam)
         return output
 
-
+    @numba.jit
     def rotate_image(self, image, ccw):
         m, n, ch = image.shape
         output = np.zeros((n, m, ch))
@@ -299,7 +300,7 @@ class SeamCarver:
                     output[:, m - 1 - row, c] = image[row, :, c]
         return output
 
-
+    @numba.jit
     def rotate_mask(self, mask, ccw):
         m, n = mask.shape
         output = np.zeros((n, m))
@@ -312,7 +313,7 @@ class SeamCarver:
                 output[:, m - 1 - row] = mask[row, : ]
         return output
 
-
+    @numba.jit
     def delete_seam_on_mask(self, seam_idx):
         m, n = self.mask.shape
         output = np.zeros((m, n - 1))
@@ -321,7 +322,7 @@ class SeamCarver:
             output[row, : ] = np.delete(self.mask[row, : ], [col])
         self.mask = np.copy(output)
 
-
+    @numba.jit
     def add_seam_on_mask(self, seam_idx):
         m, n = self.mask.shape
         output = np.zeros((m, n + 1))
@@ -339,7 +340,7 @@ class SeamCarver:
                 output[row, col + 1: ] = self.mask[row, col: ]
         self.mask = np.copy(output)
 
-
+    @numba.jit
     def get_object_dimension(self):
         rows, cols = np.where(self.mask > 0)
         height = np.amax(rows) - np.amin(rows) + 1
