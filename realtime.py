@@ -18,8 +18,8 @@ mask = np.zeros(img.shape[:2], np.uint8)
 
 sketcher = Sketcher('image', [img_masked, mask], lambda : ((255, 255, 255), 255))
 
-cv2.createTrackbar('width', 'image', img.shape[1], img.shape[1], nothing)
-cv2.createTrackbar('height', 'image', img.shape[0], img.shape[0], nothing)
+cv2.createTrackbar('width', 'image', img.shape[1], img.shape[1]*2, nothing)
+cv2.createTrackbar('height', 'image', img.shape[0], img.shape[0]*2, nothing)
 
 while True:
   key = cv2.waitKey()
